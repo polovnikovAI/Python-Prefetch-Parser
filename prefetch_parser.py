@@ -7,20 +7,20 @@ from decompress import DecompressWin
 
 DB_NAME = "prefetch.db"
 
-
+# чтение значения (4 байта)
 def read_uint32(data, offset):
     return int.from_bytes(data[offset:offset+4], "little")
 
-
+# чтение значения (8 байт)
 def read_uint64(data, offset):
     return int.from_bytes(data[offset:offset+8], "little")
 
-
+# чтение строки в utf-16
 def read_string_utf16(data, offset, length):
     raw = data[offset:offset+length]
     return raw.decode("utf-16", errors="ignore").rstrip("\x00")
 
-
+# преобразование временной метки 8 байт
 def filetime_to_dt(filetime):
 
     if filetime == 0:
@@ -32,7 +32,7 @@ def filetime_to_dt(filetime):
 
     return dt.strftime("%Y.%m.%d %H:%M:%S")
 
-
+# создание бд
 def init_db():
 
     conn = sqlite3.connect(DB_NAME)
@@ -55,19 +55,16 @@ def init_db():
     conn.commit()
     return conn
 
-
+# парсер
 def parse_pf(data, Filename):
 
     version = read_uint32(data, 0)
-
     process_EXE = read_string_utf16(data, 16, 60)
-
     file_size = read_uint32(data, 12)
-
     run_count = read_uint32(data, 200)
 
+    # достаем временные метки
     run_times = []
-
     run_time_offset = 128
 
     for i in range(8):
@@ -93,27 +90,23 @@ def parse_pf(data, Filename):
 
     volume_creation_time = filetime_to_dt(volume_creation)
 
-    # FILE LIST
+    # File list
     filenames_offset = read_uint32(data, 100)
     filenames_size = read_uint32(data, 104)
-
     files_raw = data[filenames_offset:filenames_offset+filenames_size]
 
+    # список файлов через 0х00 байт
     files = files_raw.decode("utf-16", errors="ignore").split("\x00")
-
     files = [f for f in files if f.strip()]
-
     files_str = "\n".join(files)
 
+    # собираем уникальные папки
     directories = set()
 
     for f in files:
-
         directory = os.path.dirname(f)
-
         if directory:
             directories.add(directory)
-
     dirs_str = "\n".join(directories)
 
     return {
@@ -128,7 +121,7 @@ def parse_pf(data, Filename):
         "directories": dirs_str
     }
 
-
+# записываем в бд
 def save_to_db(conn, data):
 
     cursor = conn.cursor()
@@ -149,48 +142,38 @@ def save_to_db(conn, data):
 
     conn.commit()
 
-
+# работа с /Prefetch
 def process_directory(path):
 
+    # находим и распаковываем файлы .pf
     decompressor = DecompressWin()
-
     conn = init_db()
-
     files = [f for f in os.listdir(path) if f.lower().endswith(".pf")]
-
     total = len(files)
 
     for i, file in enumerate(files, 1):
-
         full_path = os.path.join(path, file)
-
         print(f"[{i}/{total}] Processing {file}")
 
         data = decompressor.decompress(full_path)
 
         if data is None:
-
             print("Decompression failed")
-
             continue
 
+        # парсим и сохраняем в бд
         parsed = parse_pf(data, file)
-
         save_to_db(conn, parsed)
 
     conn.close()
+    print("\nProcessing completed. Check db file")
 
-    print("\nProcessing completed")
-
-
+# проверка аргументов запуска
 if __name__ == "__main__":
 
     if len(sys.argv) != 2:
-
         print("Usage: python prefetch_parser.py <path_to_pf_folder>")
-
         sys.exit(1)
 
     directory = sys.argv[1]
-
     process_directory(directory)
